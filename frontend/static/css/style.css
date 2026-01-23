@@ -597,3 +597,151 @@ body {
     padding: 0.4rem 0.8rem;
     font-size: 0.9rem;
 }
+/* 模板管理样式 */
+.templates-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: 1.5rem;
+    margin-top: 2rem;
+}
+
+.template-card {
+    background: white;
+    border-radius: 10px;
+    padding: 1.5rem;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    transition: transform 0.3s;
+}
+
+.template-card:hover {
+    transform: translateY(-5px);
+}
+
+.template-card.system-template {
+    border-left: 4px solid #3498db;
+}
+
+.template-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #ecf0f1;
+}
+
+.template-header h4 {
+    margin: 0;
+    color: #2c3e50;
+}
+
+.badge-system {
+    background-color: #3498db;
+    color: white;
+}
+
+.badge-custom {
+    background-color: #9b59b6;
+    color: white;
+}
+
+.template-body {
+    margin: 1rem 0;
+}
+
+.template-description {
+    color: #7f8c8d;
+    margin-bottom: 1rem;
+}
+
+.template-info {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+}
+
+.template-footer {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid #ecf0f1;
+}
+
+.template-full-details {
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.header-section,
+.sections-container,
+.summary-section {
+    margin-bottom: 2rem;
+}
+
+.header-section h4,
+.sections-container h4,
+.summary-section h4 {
+    color: #2c3e50;
+    margin-bottom: 1rem;
+}
+
+.section-card {
+    background: #f8f9fa;
+    border-left: 3px solid #3498db;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    border-radius: 5px;
+}
+
+.section-card h5 {
+    margin: 0 0 0.5rem 0;
+    color: #2980b9;
+}
+
+.section-details p {
+    margin: 0.3rem 0;
+}
+
+.stat-card {
+    text-align: center;
+    padding: 1.5rem;
+    background: #f8f9fa;
+    border-radius: 10px;
+}
+
+.difficulty-chart {
+    margin-top: 1rem;
+}
+
+.difficulty-bar {
+    margin: 1rem 0;
+}
+
+.difficulty-bar span {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+}
+
+.difficulty-bar .bar {
+    height: 30px;
+    border-radius: 5px;
+    transition: width 0.5s;
+}
+
+.info-text {
+    background: #e3f2fd;
+    padding: 1rem;
+    border-radius: 5px;
+    border-left: 4px solid #2196f3;
+    margin: 1rem 0;
+}
+
+.empty-message {
+    text-align: center;
+    color: #7f8c8d;
+    padding: 3rem;
+    font-size: 1.2rem;
+}

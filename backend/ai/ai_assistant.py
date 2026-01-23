@@ -131,19 +131,35 @@ CONFIDENCE: [high/medium/low]"""
             }
 
         try:
-            prompt = f"""Please analyze the following text and extract individual questions. This text may contain exam questions in English with some Chinese descriptions.
+            prompt = f"""Please analyze the following text and extract individual questions. This text contains English exam questions (especially for Chinese middle school English exams) with some Chinese descriptions.
 
 Text to analyze:
 ---
 {text}
 ---
 
-For each question found, please provide:
-1. The complete question text
-2. Question type (multiple_choice, true_false, short_answer, essay, fill_in_blank, calculation, etc.)
-3. Difficulty level (easy, medium, hard)
-4. Any answer choices (for multiple choice questions)
-5. Key knowledge points/topics (as tags)
+IMPORTANT: Identify and extract questions based on these common English exam question types:
+1. **Multiple Choice (单选题)**: Four options A/B/C/D, choose the best answer
+2. **Cloze Test (完形填空)**: Fill in blanks in a passage with provided options
+3. **Reading Comprehension (阅读理解)**: Read a passage and answer multiple questions
+4. **Task-based Reading (任务型阅读)**: Complete tables, answer questions based on passage
+5. **Word Selection (选词填空)**: Choose words from a word bank to fill blanks
+6. **Grammar Filling (语法填空)**: Fill blanks with correct grammar forms (may have hints)
+7. **Spelling (单词拼写)**: Spell words based on context and hints
+8. **Sentence Transformation (句型转换)**: Rewrite sentences keeping meaning
+9. **Translation (翻译)**: Translate between Chinese and English
+10. **Writing (书面表达)**: Essay writing based on prompts
+
+For each question found, provide:
+- Question number (if identifiable)
+- Complete question text
+- Question type (use codes: multiple_choice, cloze_test, reading_comprehension, task_based_reading, word_selection, grammar_filling, spelling, sentence_transformation, translation, writing)
+- Sub-type if applicable (e.g., for reading: detail_comprehension, main_idea, inference, vocabulary, title)
+- Difficulty level (easy, medium, hard)
+- Answer choices (for multiple choice types)
+- Passage text (if question refers to a passage)
+- Key knowledge points as tags (e.g., grammar, vocabulary, tenses, etc.)
+- For reading/cloze: indicate if this is a parent question with sub-questions
 
 Format your response as a JSON array:
 ```json
@@ -152,9 +168,13 @@ Format your response as a JSON array:
     "question_number": 1,
     "content": "question text here",
     "question_type": "multiple_choice",
+    "sub_type": "grammar",
     "difficulty": "medium",
     "choices": ["A. ...", "B. ...", "C. ...", "D. ..."],
-    "tags": ["algebra", "equations"],
+    "passage": "full passage text if applicable",
+    "tags": ["present_perfect_tense", "grammar"],
+    "has_sub_questions": false,
+    "parent_question_number": null,
     "notes": "any additional notes"
   }},
   ...

@@ -10,6 +10,7 @@ import json
 from backend.database import DatabaseManager
 from backend.ocr import OCRProcessor
 from backend.api import QuestionManager, TagManager, ExamGenerator
+from backend.api.template_manager import TemplateManager
 from backend.export import WordExporter
 from backend.ai import AIAssistant
 
@@ -36,11 +37,16 @@ ocr_processor = OCRProcessor(use_gpu=False, lang='en')
 question_manager = QuestionManager(db_manager)
 tag_manager = TagManager(db_manager)
 exam_generator = ExamGenerator(db_manager)
+template_manager = TemplateManager(db_manager)
 word_exporter = WordExporter()
 
 # AI助手 - 用于OCR纠正和题目解析
 ai_assistant = AIAssistant()
 print(f"AI助手状态: {'可用' if ai_assistant.is_available() else '不可用 (请设置ANTHROPIC_API_KEY环境变量)'}")
+
+# 初始化预设模板
+template_manager.init_preset_templates()
+print("试卷模板系统已初始化")
 
 # 允许的文件类型
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf', 'bmp'}
@@ -75,6 +81,12 @@ def questions_page():
 def exam_page():
     """组卷页面"""
     return render_template('exam.html')
+
+
+@app.route('/templates', methods=['GET'])
+def templates_page():
+    """试卷模板页面"""
+    return render_template('templates.html')
 
 
 # ========== API接口 ==========
@@ -472,6 +484,99 @@ def ai_status():
         'available': ai_assistant.is_available(),
         'message': 'AI助手可用' if ai_assistant.is_available() else '请配置ANTHROPIC_API_KEY环境变量'
     })
+
+
+# ========== 试卷模板API ==========
+
+@app.route('/api/templates', methods=['GET'])
+def get_templates():
+    """获取所有模板"""
+    try:
+        category = request.args.get('category')
+        templates = template_manager.get_all_templates(category)
+        return jsonify({'success': True, 'templates': templates})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/templates/<int:template_id>', methods=['GET'])
+def get_template(template_id):
+    """获取单个模板"""
+    try:
+        template = template_manager.get_template(template_id)
+        if template:
+            return jsonify({'success': True, 'template': template})
+        else:
+            return jsonify({'success': False, 'error': '模板不存在'}), 404
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/templates', methods=['POST'])
+def create_template():
+    """创建自定义模板"""
+    try:
+        data = request.json
+        template_id = template_manager.create_template(
+            name=data.get('name'),
+            description=data.get('description'),
+            category=data.get('category'),
+            total_score=data.get('total_score', 100.0),
+            paper_size=data.get('paper_size', 'A4'),
+            structure=data.get('structure', {})
+        )
+        return jsonify({'success': True, 'template_id': template_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/templates/<int:template_id>', methods=['PUT'])
+def update_template(template_id):
+    """更新模板"""
+    try:
+        data = request.json
+        success = template_manager.update_template(template_id, **data)
+        return jsonify({'success': success})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/templates/<int:template_id>', methods=['DELETE'])
+def delete_template(template_id):
+    """删除模板"""
+    try:
+        success = template_manager.delete_template(template_id)
+        return jsonify({'success': success})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/templates/<int:template_id>/generate', methods=['POST'])
+def generate_from_template(template_id):
+    """根据模板生成试卷"""
+    try:
+        data = request.json
+        paper_name = data.get('name', '未命名试卷')
+
+        paper_id = template_manager.generate_paper_from_template(
+            template_id,
+            paper_name,
+            question_manager
+        )
+
+        return jsonify({'success': True, 'paper_id': paper_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/templates/<int:template_id>/stats', methods=['GET'])
+def get_template_stats(template_id):
+    """获取模板统计信息"""
+    try:
+        stats = template_manager.get_template_statistics(template_id)
+        return jsonify({'success': True, 'statistics': stats})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':
