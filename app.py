@@ -2,10 +2,14 @@
 题库系统主应用
 """
 import os
+from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import json
+
+# 加载环境变量
+load_dotenv()
 
 from backend.database import DatabaseManager
 from backend.ocr import OCRProcessor
