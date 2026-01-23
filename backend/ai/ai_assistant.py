@@ -1,33 +1,80 @@
 """
 AI辅助识别和纠正模块
-使用Claude API进行OCR结果纠正和智能题目解析
+支持Claude和Gemini API
 """
 import os
 from typing import Dict, Any, List, Optional
-import anthropic
+from backend.ai.ai_providers import AIProvider, ClaudeProvider, GeminiProvider
 
 
 class AIAssistant:
-    """AI助手，用于OCR纠正和题目解析"""
+    """AI助手，用于OCR纠正和题目解析，支持多个AI提供商"""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, provider: str = None):
         """
         初始化AI助手
-        :param api_key: Anthropic API密钥，如果不提供则从环境变量读取
+        :param provider: AI提供商 'claude', 'gemini' 或 'auto'（自动选择）
         """
-        self.api_key = api_key or os.getenv('ANTHROPIC_API_KEY')
-        self.client = None
+        self.provider_name = provider or os.getenv('AI_PROVIDER', 'auto')
+        self.provider: Optional[AIProvider] = None
+        self._init_provider()
 
-        if self.api_key:
-            try:
-                self.client = anthropic.Anthropic(api_key=self.api_key)
-            except Exception as e:
-                print(f"初始化Claude客户端失败: {e}")
-                self.client = None
+    def _init_provider(self):
+        """初始化AI提供商"""
+        if self.provider_name == 'auto':
+            # 自动选择：优先Claude，然后Gemini
+            claude = ClaudeProvider()
+            if claude.is_available():
+                self.provider = claude
+                self.provider_name = 'claude'
+                print("✅ AI助手: 使用Claude")
+                return
+
+            gemini = GeminiProvider()
+            if gemini.is_available():
+                self.provider = gemini
+                self.provider_name = 'gemini'
+                print("✅ AI助手: 使用Gemini")
+                return
+
+            print("⚠️ AI助手: 无可用的AI提供商")
+
+        elif self.provider_name.lower() == 'claude':
+            claude = ClaudeProvider()
+            if claude.is_available():
+                self.provider = claude
+                print("✅ AI助手: 使用Claude")
+            else:
+                print("❌ Claude不可用，请设置ANTHROPIC_API_KEY")
+
+        elif self.provider_name.lower() == 'gemini':
+            gemini = GeminiProvider()
+            if gemini.is_available():
+                self.provider = gemini
+                print("✅ AI助手: 使用Gemini")
+            else:
+                print("❌ Gemini不可用，请设置GOOGLE_API_KEY或GEMINI_API_KEY")
+
+        else:
+            print(f"❌ 未知的AI提供商: {self.provider_name}")
 
     def is_available(self) -> bool:
         """检查AI助手是否可用"""
-        return self.client is not None
+        return self.provider is not None and self.provider.is_available()
+
+    def get_provider_info(self) -> Dict[str, Any]:
+        """获取当前提供商信息"""
+        if self.is_available():
+            return {
+                'available': True,
+                'provider': self.provider.get_provider_name(),
+                'provider_code': self.provider_name
+            }
+        return {
+            'available': False,
+            'provider': None,
+            'provider_code': self.provider_name
+        }
 
     def correct_ocr_text(self, ocr_text: str, confidence: float = 0.0) -> Dict[str, Any]:
         """
@@ -39,83 +86,12 @@ class AIAssistant:
         if not self.is_available():
             return {
                 'success': False,
-                'error': 'AI助手不可用，请配置ANTHROPIC_API_KEY环境变量',
+                'error': 'AI助手不可用',
                 'corrected_text': ocr_text,
                 'original_text': ocr_text
             }
 
-        try:
-            prompt = f"""Please correct the following text that was extracted using OCR. The text is primarily English with some Chinese descriptions. The OCR confidence is {confidence:.2%}.
-
-Common OCR errors to watch for:
-- Confusing similar characters (0/O, 1/l/I, 5/S, etc.)
-- Missing or extra spaces
-- Mathematical symbols and equations
-- Special characters
-
-Original OCR text:
----
-{ocr_text}
----
-
-Please provide:
-1. The corrected text (fix obvious OCR errors but preserve the original structure)
-2. A brief list of corrections made
-3. Your confidence level (high/medium/low) in the corrections
-
-Format your response as:
-CORRECTED TEXT:
-[corrected text here]
-
-CORRECTIONS MADE:
-- [list of corrections]
-
-CONFIDENCE: [high/medium/low]"""
-
-            message = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=4000,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
-
-            response_text = message.content[0].text
-
-            # 解析响应
-            corrected_text = ocr_text
-            corrections = []
-            ai_confidence = 'medium'
-
-            if 'CORRECTED TEXT:' in response_text:
-                parts = response_text.split('CORRECTED TEXT:')[1]
-                if 'CORRECTIONS MADE:' in parts:
-                    corrected_text = parts.split('CORRECTIONS MADE:')[0].strip()
-                    corrections_part = parts.split('CORRECTIONS MADE:')[1]
-                    if 'CONFIDENCE:' in corrections_part:
-                        corrections_text = corrections_part.split('CONFIDENCE:')[0].strip()
-                        ai_confidence = corrections_part.split('CONFIDENCE:')[1].strip().lower()
-                        corrections = [c.strip('- ').strip() for c in corrections_text.split('\n') if c.strip()]
-                else:
-                    corrected_text = parts.strip()
-
-            return {
-                'success': True,
-                'corrected_text': corrected_text,
-                'original_text': ocr_text,
-                'corrections': corrections,
-                'ai_confidence': ai_confidence,
-                'ocr_confidence': confidence
-            }
-
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e),
-                'corrected_text': ocr_text,
-                'original_text': ocr_text
-            }
+        return self.provider.correct_ocr_text(ocr_text, confidence)
 
     def parse_questions(self, text: str) -> Dict[str, Any]:
         """
@@ -130,94 +106,7 @@ CONFIDENCE: [high/medium/low]"""
                 'questions': []
             }
 
-        try:
-            prompt = f"""Please analyze the following text and extract individual questions. This text contains English exam questions (especially for Chinese middle school English exams) with some Chinese descriptions.
-
-Text to analyze:
----
-{text}
----
-
-IMPORTANT: Identify and extract questions based on these common English exam question types:
-1. **Multiple Choice (单选题)**: Four options A/B/C/D, choose the best answer
-2. **Cloze Test (完形填空)**: Fill in blanks in a passage with provided options
-3. **Reading Comprehension (阅读理解)**: Read a passage and answer multiple questions
-4. **Task-based Reading (任务型阅读)**: Complete tables, answer questions based on passage
-5. **Word Selection (选词填空)**: Choose words from a word bank to fill blanks
-6. **Grammar Filling (语法填空)**: Fill blanks with correct grammar forms (may have hints)
-7. **Spelling (单词拼写)**: Spell words based on context and hints
-8. **Sentence Transformation (句型转换)**: Rewrite sentences keeping meaning
-9. **Translation (翻译)**: Translate between Chinese and English
-10. **Writing (书面表达)**: Essay writing based on prompts
-
-For each question found, provide:
-- Question number (if identifiable)
-- Complete question text
-- Question type (use codes: multiple_choice, cloze_test, reading_comprehension, task_based_reading, word_selection, grammar_filling, spelling, sentence_transformation, translation, writing)
-- Sub-type if applicable (e.g., for reading: detail_comprehension, main_idea, inference, vocabulary, title)
-- Difficulty level (easy, medium, hard)
-- Answer choices (for multiple choice types)
-- Passage text (if question refers to a passage)
-- Key knowledge points as tags (e.g., grammar, vocabulary, tenses, etc.)
-- For reading/cloze: indicate if this is a parent question with sub-questions
-
-Format your response as a JSON array:
-```json
-[
-  {{
-    "question_number": 1,
-    "content": "question text here",
-    "question_type": "multiple_choice",
-    "sub_type": "grammar",
-    "difficulty": "medium",
-    "choices": ["A. ...", "B. ...", "C. ...", "D. ..."],
-    "passage": "full passage text if applicable",
-    "tags": ["present_perfect_tense", "grammar"],
-    "has_sub_questions": false,
-    "parent_question_number": null,
-    "notes": "any additional notes"
-  }},
-  ...
-]
-```
-
-If no clear questions are found, return an empty array []."""
-
-            message = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=8000,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
-
-            response_text = message.content[0].text
-
-            # 提取JSON部分
-            import json
-            import re
-
-            json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
-            if json_match:
-                json_str = json_match.group(1)
-                questions = json.loads(json_str)
-            else:
-                # 尝试直接解析整个响应
-                questions = json.loads(response_text)
-
-            return {
-                'success': True,
-                'questions': questions,
-                'total_questions': len(questions)
-            }
-
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e),
-                'questions': []
-            }
+        return self.provider.parse_questions(text)
 
     def analyze_question(self, question_text: str) -> Dict[str, Any]:
         """
@@ -231,68 +120,7 @@ If no clear questions are found, return an empty array []."""
                 'error': 'AI助手不可用'
             }
 
-        try:
-            prompt = f"""Please analyze the following question and provide detailed information:
-
-Question:
----
-{question_text}
----
-
-Please provide:
-1. Question type (multiple_choice, true_false, short_answer, essay, fill_in_blank, calculation, etc.)
-2. Difficulty level (easy, medium, hard) with brief reasoning
-3. Main knowledge points/topics (as tags)
-4. Subject area (if identifiable)
-5. If it's a multiple choice question, list the choices
-6. Any suggested answer or solution approach (if obvious from the question)
-
-Format your response as JSON:
-```json
-{{
-  "question_type": "type",
-  "difficulty": "level",
-  "difficulty_reasoning": "why this difficulty",
-  "tags": ["tag1", "tag2"],
-  "subject": "subject name",
-  "choices": ["A. ...", "B. ..."] or null,
-  "suggested_answer": "answer if obvious" or null,
-  "notes": "any additional observations"
-}}
-```"""
-
-            message = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=2000,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
-
-            response_text = message.content[0].text
-
-            # 提取JSON
-            import json
-            import re
-
-            json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
-            if json_match:
-                json_str = json_match.group(1)
-                analysis = json.loads(json_str)
-            else:
-                analysis = json.loads(response_text)
-
-            return {
-                'success': True,
-                **analysis
-            }
-
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e)
-            }
+        return self.provider.analyze_question(question_text)
 
     def batch_correct_questions(self, questions: List[str]) -> Dict[str, Any]:
         """
@@ -310,7 +138,6 @@ Format your response as JSON:
         results = []
         for idx, question in enumerate(questions):
             try:
-                # 分析每个题目
                 analysis = self.analyze_question(question)
                 if analysis['success']:
                     results.append({
@@ -334,5 +161,6 @@ Format your response as JSON:
         return {
             'success': True,
             'questions': results,
-            'total': len(results)
+            'total': len(results),
+            'provider': self.provider.get_provider_name() if self.provider else None
         }
