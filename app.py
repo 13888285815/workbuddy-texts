@@ -11,6 +11,7 @@ from backend.database import DatabaseManager
 from backend.ocr import OCRProcessor
 from backend.api import QuestionManager, TagManager, ExamGenerator
 from backend.export import WordExporter
+from backend.ai import AIAssistant
 
 # 创建Flask应用
 app = Flask(__name__,
@@ -30,11 +31,16 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 db_manager = DatabaseManager('question_bank.db')
 db_manager.init_db()
 
-ocr_processor = OCRProcessor(use_gpu=False)
+# OCR处理器 - 配置为英文优先
+ocr_processor = OCRProcessor(use_gpu=False, lang='en')
 question_manager = QuestionManager(db_manager)
 tag_manager = TagManager(db_manager)
 exam_generator = ExamGenerator(db_manager)
 word_exporter = WordExporter()
+
+# AI助手 - 用于OCR纠正和题目解析
+ai_assistant = AIAssistant()
+print(f"AI助手状态: {'可用' if ai_assistant.is_available() else '不可用 (请设置ANTHROPIC_API_KEY环境变量)'}")
 
 # 允许的文件类型
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf', 'bmp'}
@@ -75,7 +81,7 @@ def exam_page():
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
-    """上传文件并进行OCR识别"""
+    """上传文件并进行OCR识别（支持AI纠正）"""
     if 'file' not in request.files:
         return jsonify({'success': False, 'error': '没有文件'}), 400
 
@@ -85,6 +91,9 @@ def upload_file():
 
     if not allowed_file(file.filename):
         return jsonify({'success': False, 'error': '不支持的文件格式'}), 400
+
+    # 获取是否使用AI纠正的参数
+    use_ai = request.form.get('use_ai', 'true').lower() == 'true'
 
     try:
         # 保存文件
@@ -96,16 +105,54 @@ def upload_file():
         result = ocr_processor.process_file(filepath)
 
         if result['success']:
-            # 尝试提取题目
             text = result.get('text', '')
-            questions = ocr_processor.extract_questions_from_text(text)
+            confidence = result.get('avg_confidence', 0.0)
 
-            return jsonify({
+            # AI纠正OCR文本
+            ai_result = None
+            corrected_text = text
+            if use_ai and ai_assistant.is_available():
+                ai_result = ai_assistant.correct_ocr_text(text, confidence)
+                if ai_result['success']:
+                    corrected_text = ai_result['corrected_text']
+
+            # 使用AI智能提取题目
+            questions = []
+            ai_questions = None
+            if use_ai and ai_assistant.is_available():
+                ai_questions = ai_assistant.parse_questions(corrected_text)
+                if ai_questions['success'] and ai_questions['questions']:
+                    questions = ai_questions['questions']
+                else:
+                    # AI解析失败，使用传统方法
+                    questions = ocr_processor.extract_questions_from_text(corrected_text)
+            else:
+                # 不使用AI，使用传统方法提取题目
+                questions = ocr_processor.extract_questions_from_text(corrected_text)
+
+            response_data = {
                 'success': True,
-                'text': text,
+                'text': corrected_text,
+                'original_text': text,
                 'questions': questions,
-                'filename': filename
-            })
+                'filename': filename,
+                'ocr_confidence': confidence,
+                'ai_used': use_ai and ai_assistant.is_available()
+            }
+
+            # 添加AI相关信息
+            if ai_result:
+                response_data['ai_correction'] = {
+                    'corrections': ai_result.get('corrections', []),
+                    'confidence': ai_result.get('ai_confidence', 'unknown')
+                }
+
+            if ai_questions and ai_questions['success']:
+                response_data['ai_parsing'] = {
+                    'total_questions': ai_questions.get('total_questions', 0)
+                }
+
+            return jsonify(response_data)
         else:
             return jsonify(result), 500
 
@@ -347,6 +394,84 @@ def export_questions():
         )
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ========== AI辅助API ==========
+
+@app.route('/api/ai/correct', methods=['POST'])
+def ai_correct_text():
+    """使用AI纠正文本"""
+    if not ai_assistant.is_available():
+        return jsonify({
+            'success': False,
+            'error': 'AI助手不可用，请配置ANTHROPIC_API_KEY环境变量'
+        }), 503
+
+    try:
+        data = request.json
+        text = data.get('text', '')
+        confidence = data.get('confidence', 0.0)
+
+        if not text:
+            return jsonify({'success': False, 'error': '文本不能为空'}), 400
+
+        result = ai_assistant.correct_ocr_text(text, confidence)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/ai/parse', methods=['POST'])
+def ai_parse_questions():
+    """使用AI解析题目"""
+    if not ai_assistant.is_available():
+        return jsonify({
+            'success': False,
+            'error': 'AI助手不可用，请配置ANTHROPIC_API_KEY环境变量'
+        }), 503
+
+    try:
+        data = request.json
+        text = data.get('text', '')
+
+        if not text:
+            return jsonify({'success': False, 'error': '文本不能为空'}), 400
+
+        result = ai_assistant.parse_questions(text)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/ai/analyze', methods=['POST'])
+def ai_analyze_question():
+    """使用AI分析单个题目"""
+    if not ai_assistant.is_available():
+        return jsonify({
+            'success': False,
+            'error': 'AI助手不可用，请配置ANTHROPIC_API_KEY环境变量'
+        }), 503
+
+    try:
+        data = request.json
+        question_text = data.get('question', '')
+
+        if not question_text:
+            return jsonify({'success': False, 'error': '题目不能为空'}), 400
+
+        result = ai_assistant.analyze_question(question_text)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/ai/status', methods=['GET'])
+def ai_status():
+    """获取AI助手状态"""
+    return jsonify({
+        'available': ai_assistant.is_available(),
+        'message': 'AI助手可用' if ai_assistant.is_available() else '请配置ANTHROPIC_API_KEY环境变量'
+    })
 
 
 if __name__ == '__main__':

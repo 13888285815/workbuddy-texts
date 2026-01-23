@@ -15,34 +15,48 @@ import numpy as np
 class OCRProcessor:
     """OCR处理器"""
 
-    def __init__(self, use_gpu=False):
+    def __init__(self, use_gpu=False, lang='en'):
         """
         初始化OCR处理器
         :param use_gpu: 是否使用GPU加速
+        :param lang: 语言模式 'en'=英文, 'ch'=中文, 'en+ch'=中英文混合
         """
-        self.ocr = PaddleOCR(
+        # 英文优先配置
+        self.ocr_en = PaddleOCR(
             use_angle_cls=True,
-            lang='ch',  # 中文
+            lang='en',  # 英文
             use_gpu=use_gpu,
             show_log=False
         )
 
-    def process_image(self, image_path: str) -> Dict[str, Any]:
+        # 中英文混合配置
+        self.ocr_mix = PaddleOCR(
+            use_angle_cls=True,
+            lang='ch',  # 中文模式也能识别英文
+            use_gpu=use_gpu,
+            show_log=False
+        )
+
+        self.lang = lang
+        self.ocr = self.ocr_en if lang == 'en' else self.ocr_mix
+
+    def process_image(self, image_path: str, use_both=True) -> Dict[str, Any]:
         """
         处理图片文件，提取文本
         :param image_path: 图片路径
+        :param use_both: 是否同时使用英文和中英文OCR进行识别
         :return: 识别结果字典
         """
         try:
-            result = self.ocr.ocr(image_path, cls=True)
+            # 先用英文OCR识别
+            result_en = self.ocr_en.ocr(image_path, cls=True)
 
-            # 解析结果
             text_lines = []
             boxes = []
             confidences = []
 
-            if result and result[0]:
-                for line in result[0]:
+            if result_en and result_en[0]:
+                for line in result_en[0]:
                     box = line[0]  # 文本框坐标
                     text = line[1][0]  # 识别的文本
                     confidence = line[1][1]  # 置信度
@@ -53,6 +67,30 @@ class OCRProcessor:
 
             # 合并文本
             full_text = '\n'.join(text_lines)
+            avg_conf = sum(confidences) / len(confidences) if confidences else 0
+
+            # 如果启用双模式且置信度较低，再用中英文混合OCR识别
+            mixed_text = None
+            if use_both and avg_conf < 0.85:
+                result_mix = self.ocr_mix.ocr(image_path, cls=True)
+
+                text_lines_mix = []
+                confidences_mix = []
+
+                if result_mix and result_mix[0]:
+                    for line in result_mix[0]:
+                        text_lines_mix.append(line[1][0])
+                        confidences_mix.append(line[1][1])
+
+                mixed_text = '\n'.join(text_lines_mix)
+                avg_conf_mix = sum(confidences_mix) / len(confidences_mix) if confidences_mix else 0
+
+                # 如果混合模式置信度更高，使用混合模式结果
+                if avg_conf_mix > avg_conf:
+                    full_text = mixed_text
+                    text_lines = text_lines_mix
+                    confidences = confidences_mix
+                    avg_conf = avg_conf_mix
 
             return {
                 'success': True,
@@ -61,7 +99,8 @@ class OCRProcessor:
                 'boxes': boxes,
                 'confidences': confidences,
                 'total_lines': len(text_lines),
-                'avg_confidence': sum(confidences) / len(confidences) if confidences else 0
+                'avg_confidence': avg_conf,
+                'mixed_text': mixed_text  # 保存混合模式的结果供参考
             }
 
         except Exception as e:
@@ -169,8 +208,7 @@ class OCRProcessor:
 
     def extract_questions_from_text(self, text: str) -> List[str]:
         """
-        从文本中提取题目
-        这是一个基础实现，可以根据实际需求改进
+        从文本中提取题目（支持英文题目编号）
         :param text: 文本内容
         :return: 题目列表
         """
@@ -178,9 +216,17 @@ class OCRProcessor:
         lines = text.split('\n')
 
         current_question = []
-        question_indicators = ['1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.',
-                              '一、', '二、', '三、', '四、', '五、',
-                              '（1）', '（2）', '（3）', '（4）', '（5）']
+        # 支持英文题目编号：1., 2., Question 1, Q1, (1), etc.
+        import re
+        question_patterns = [
+            r'^\d+\.',  # 1., 2., 3.
+            r'^Question\s+\d+',  # Question 1, Question 2
+            r'^Q\d+',  # Q1, Q2
+            r'^\(\d+\)',  # (1), (2)
+            r'^[A-Z]\.',  # A., B., C. (用于选项，但也可能是题目)
+            r'^一、|^二、|^三、|^四、|^五、',  # 中文编号
+            r'^（\d+）',  # 中文括号编号
+        ]
 
         for line in lines:
             line = line.strip()
@@ -188,7 +234,7 @@ class OCRProcessor:
                 continue
 
             # 检查是否是新题目的开始
-            is_new_question = any(line.startswith(indicator) for indicator in question_indicators)
+            is_new_question = any(re.match(pattern, line) for pattern in question_patterns)
 
             if is_new_question and current_question:
                 # 保存上一道题目
