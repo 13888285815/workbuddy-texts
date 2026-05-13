@@ -4,7 +4,7 @@
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from backend.database.models import ExamTemplate, ExamPaper
-from backend.templates.english_templates import PRESET_TEMPLATES, get_all_templates, get_template_by_name
+from backend.templates.chinese_templates import PRESET_TEMPLATES, get_all_templates, get_template_by_name
 import json
 
 

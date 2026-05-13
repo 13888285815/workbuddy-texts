@@ -80,6 +80,10 @@ async function handleFileUpload(file) {
     const useAi = document.getElementById('useAiToggle').checked;
     formData.append('use_ai', useAi);
 
+    // 添加语言和学科参数
+    const ocrLang = document.getElementById('ocrLang').value;
+    formData.append('lang', ocrLang);
+
     const processingStatus = document.getElementById('processingStatus');
     processingStatus.style.display = 'block';
     processingStatus.querySelector('p').textContent = useAi ?

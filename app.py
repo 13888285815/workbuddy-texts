@@ -36,10 +36,10 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 db_manager = DatabaseManager('question_bank.db')
 db_manager.init_db()
 
-# OCR处理器 - 配置为英文优先
-ocr_processor = OCRProcessor(use_gpu=False, lang='en')
+# OCR处理器 - 中文优先（PaddleOCR中文模型同时支持中英文）
+ocr_processor = OCRProcessor(use_gpu=False, lang='ch')
 if _ocr_available:
-    print("✅ OCR引擎已加载（PaddleOCR）")
+    print("✅ OCR引擎已加载（PaddleOCR 中文模式）")
 else:
     print("⚠️  OCR引擎不可用（numpy版本不兼容），上传识别功能将受限")
 
@@ -115,6 +115,8 @@ def upload_file():
 
     # 获取是否使用AI纠正的参数
     use_ai = request.form.get('use_ai', 'true').lower() == 'true'
+    # 获取语言参数：ch=中文(默认), en=英文
+    lang = request.form.get('lang', 'ch')
 
     try:
         # 保存文件
@@ -122,8 +124,8 @@ def upload_file():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        # OCR识别
-        result = ocr_processor.process_file(filepath)
+        # OCR识别（传入语言参数）
+        result = ocr_processor.process_file(filepath, lang=lang)
 
         if result['success']:
             text = result.get('text', '')

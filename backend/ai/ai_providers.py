@@ -1,6 +1,7 @@
 """
 AI提供商基类和具体实现
 支持Claude、Gemini API 和 Ollama 本地推理
+中文优先，支持中国各学科试卷识别
 """
 import os
 import json as _json
@@ -40,6 +41,90 @@ class AIProvider(ABC):
         pass
 
 
+# ===== 通用中文提示词 =====
+
+OCR_CORRECT_PROMPT = """请纠正以下OCR识别文本中的错误。这是中国试卷的扫描识别结果，以中文为主，可能包含英文、数学公式等。
+
+常见OCR错误：
+- 中文字符混淆：已/己、人/入、干/千、日/曰等
+- 数字和符号：0/O、1/l/I、5/S、+/t等
+- 数学符号丢失或误识别：分数线、根号、积分号、等于号等
+- 括号不匹配：中英文括号混用
+- 空格和换行错乱
+
+OCR置信度：{confidence}
+
+原始OCR文本：
+---
+{ocr_text}
+---
+
+请提供：
+1. 纠正后的文本（修正明显OCR错误，保留原始结构和格式）
+2. 修正列表
+3. 纠正置信度（高/中/低）
+
+格式：
+【纠正文本】
+[纠正后的文本]
+
+【修正列表】
+- [修正1：原文→纠正]
+- [修正2：原文→纠正]
+
+【置信度】[高/中/低]"""
+
+QUESTION_PARSE_PROMPT = """请分析以下文本，提取其中的所有试题。这是中国学校的试卷内容，可能来自数学、语文、英语、物理、化学、生物、政治、历史、地理等学科。
+
+文本内容：
+---
+{text}
+---
+
+请按以下中国常见题型进行识别和分类：
+
+【数学】选择题、填空题、解答题、证明题、计算题
+【语文】选择题、填空题、阅读理解、文言文阅读、古诗词鉴赏、语言文字运用、作文
+【英语】选择题、完形填空、阅读理解、语法填空、短文改错、书面表达
+【物理】选择题、实验题、计算题、填空题
+【化学】选择题、实验题、计算题、填空题、推断题
+【生物】选择题、非选择题(填空/实验)
+【政治/历史/地理】选择题、非选择题(简答/论述/材料分析)
+
+请返回JSON数组，每道题包含：
+- question_number: 题号(如 1, 2, 3)
+- content: 题目内容(完整文本)
+- question_type: 题型(如"选择题"、"填空题"、"解答题"等)
+- subject: 学科(如"数学"、"语文"、"英语"等，不确定填"通用")
+- difficulty: 难度("简单"/"中等"/"困难")
+- choices: 选项列表(如有，格式如["A. xxx", "B. xxx", "C. xxx", "D. xxx"])
+- answer: 答案(如有)
+- section_title: 所属大题标题(如"一、选择题")
+- tags: 知识点标签(如["二次函数", "最值问题"])
+
+如果没有识别到试题，返回空数组 []
+只返回JSON，不要其他内容。"""
+
+QUESTION_ANALYZE_PROMPT = """请分析这道题目，返回JSON格式的详细信息。
+
+题目：{question}
+
+请返回：
+{{
+    "question_type": "题型(选择题/填空题/解答题等)",
+    "subject": "学科(数学/语文/英语/物理/化学等)",
+    "difficulty": "难度(简单/中等/困难)",
+    "difficulty_reasoning": "难度判断理由",
+    "knowledge_points": ["知识点1", "知识点2"],
+    "choices": ["A. ...", "B. ..."] (如有选项),
+    "suggested_answer": "参考答案",
+    "analysis": "解题思路",
+    "tags": ["标签1", "标签2"]
+}}
+
+只返回JSON，不要其他内容。"""
+
+
 class ClaudeProvider(AIProvider):
     """Claude AI提供商"""
 
@@ -70,32 +155,10 @@ class ClaudeProvider(AIProvider):
             }
 
         try:
-            prompt = f"""Please correct the following text that was extracted using OCR. The text is primarily English with some Chinese descriptions. The OCR confidence is {confidence:.2%}.
-
-Common OCR errors to watch for:
-- Confusing similar characters (0/O, 1/l/I, 5/S, etc.)
-- Missing or extra spaces
-- Mathematical symbols and equations
-- Special characters
-
-Original OCR text:
----
-{ocr_text}
----
-
-Please provide:
-1. The corrected text (fix obvious OCR errors but preserve the original structure)
-2. A brief list of corrections made
-3. Your confidence level (high/medium/low) in the corrections
-
-Format your response as:
-CORRECTED TEXT:
-[corrected text here]
-
-CORRECTIONS MADE:
-- [list of corrections]
-
-CONFIDENCE: [high/medium/low]"""
+            prompt = OCR_CORRECT_PROMPT.format(
+                confidence=f"{confidence:.2%}",
+                ocr_text=ocr_text
+            )
 
             message = self.client.messages.create(
                 model="claude-3-5-sonnet-20241022",
@@ -105,12 +168,31 @@ CONFIDENCE: [high/medium/low]"""
 
             response_text = message.content[0].text
 
-            # 解析响应
+            # 解析中文格式响应
             corrected_text = ocr_text
             corrections = []
             ai_confidence = 'medium'
 
-            if 'CORRECTED TEXT:' in response_text:
+            if '【纠正文本】' in response_text:
+                parts = response_text.split('【纠正文本】')[1]
+                if '【修正列表】' in parts:
+                    corrected_text = parts.split('【修正列表】')[0].strip()
+                    corrections_part = parts.split('【修正列表】')[1]
+                    if '【置信度】' in corrections_part:
+                        corrections_text = corrections_part.split('【置信度】')[0].strip()
+                        conf_text = corrections_part.split('【置信度】')[1].strip()
+                        # 映射中文置信度
+                        if '高' in conf_text:
+                            ai_confidence = 'high'
+                        elif '低' in conf_text:
+                            ai_confidence = 'low'
+                        else:
+                            ai_confidence = 'medium'
+                        corrections = [c.strip('- ').strip() for c in corrections_text.split('\n') if c.strip() and c.strip() != '-']
+                else:
+                    corrected_text = parts.strip()
+            # 兼容旧格式
+            elif 'CORRECTED TEXT:' in response_text:
                 parts = response_text.split('CORRECTED TEXT:')[1]
                 if 'CORRECTIONS MADE:' in parts:
                     corrected_text = parts.split('CORRECTIONS MADE:')[0].strip()
@@ -144,27 +226,7 @@ CONFIDENCE: [high/medium/low]"""
             return {'success': False, 'error': 'Claude不可用', 'questions': []}
 
         try:
-            prompt = f"""Please analyze the following text and extract individual questions. This text contains English exam questions (especially for Chinese middle school English exams) with some Chinese descriptions.
-
-Text to analyze:
----
-{text}
----
-
-IMPORTANT: Identify and extract questions based on these common English exam question types:
-1. **Multiple Choice (单选题)**: Four options A/B/C/D, choose the best answer
-2. **Cloze Test (完形填空)**: Fill in blanks in a passage with provided options
-3. **Reading Comprehension (阅读理解)**: Read a passage and answer multiple questions
-4. **Task-based Reading (任务型阅读)**: Complete tables, answer questions based on passage
-5. **Word Selection (选词填空)**: Choose words from a word bank to fill blanks
-6. **Grammar Filling (语法填空)**: Fill blanks with correct grammar forms (may have hints)
-7. **Spelling (单词拼写)**: Spell words based on context and hints
-8. **Sentence Transformation (句型转换)**: Rewrite sentences keeping meaning
-9. **Translation (翻译)**: Translate between Chinese and English
-10. **Writing (书面表达)**: Essay writing based on prompts
-
-Format your response as a JSON array with detailed information for each question.
-If no clear questions are found, return an empty array []."""
+            prompt = QUESTION_PARSE_PROMPT.format(text=text)
 
             message = self.client.messages.create(
                 model="claude-3-5-sonnet-20241022",
@@ -199,11 +261,7 @@ If no clear questions are found, return an empty array []."""
             return {'success': False, 'error': 'Claude不可用'}
 
         try:
-            prompt = f"""Analyze this question and provide detailed information in JSON format:
-
-Question: {question_text}
-
-Provide: question_type, difficulty, tags, subject, choices (if applicable), suggested_answer, notes."""
+            prompt = QUESTION_ANALYZE_PROMPT.format(question=question_text)
 
             message = self.client.messages.create(
                 model="claude-3-5-sonnet-20241022",
@@ -259,49 +317,35 @@ class GeminiProvider(AIProvider):
             }
 
         try:
-            prompt = f"""Please correct the following OCR text. The text is primarily English with some Chinese descriptions. OCR confidence: {confidence:.2%}.
-
-Common OCR errors to watch for:
-- Similar characters (0/O, 1/l/I, 5/S)
-- Missing/extra spaces
-- Mathematical symbols
-
-Original text:
----
-{ocr_text}
----
-
-Provide:
-1. Corrected text
-2. List of corrections made
-3. Confidence level (high/medium/low)
-
-Format:
-CORRECTED TEXT:
-[text]
-
-CORRECTIONS MADE:
-- [list]
-
-CONFIDENCE: [level]"""
+            prompt = OCR_CORRECT_PROMPT.format(
+                confidence=f"{confidence:.2%}",
+                ocr_text=ocr_text
+            )
 
             response = self.client.generate_content(prompt)
             response_text = response.text
 
-            # 解析响应（同Claude）
             corrected_text = ocr_text
             corrections = []
             ai_confidence = 'medium'
 
-            if 'CORRECTED TEXT:' in response_text:
-                parts = response_text.split('CORRECTED TEXT:')[1]
-                if 'CORRECTIONS MADE:' in parts:
-                    corrected_text = parts.split('CORRECTIONS MADE:')[0].strip()
-                    corrections_part = parts.split('CORRECTIONS MADE:')[1]
-                    if 'CONFIDENCE:' in corrections_part:
-                        corrections_text = corrections_part.split('CONFIDENCE:')[0].strip()
-                        ai_confidence = corrections_part.split('CONFIDENCE:')[1].strip().lower()
-                        corrections = [c.strip('- ').strip() for c in corrections_text.split('\n') if c.strip()]
+            if '【纠正文本】' in response_text:
+                parts = response_text.split('【纠正文本】')[1]
+                if '【修正列表】' in parts:
+                    corrected_text = parts.split('【修正列表】')[0].strip()
+                    corrections_part = parts.split('【修正列表】')[1]
+                    if '【置信度】' in corrections_part:
+                        corrections_text = corrections_part.split('【置信度】')[0].strip()
+                        conf_text = corrections_part.split('【置信度】')[1].strip()
+                        if '高' in conf_text:
+                            ai_confidence = 'high'
+                        elif '低' in conf_text:
+                            ai_confidence = 'low'
+                        else:
+                            ai_confidence = 'medium'
+                        corrections = [c.strip('- ').strip() for c in corrections_text.split('\n') if c.strip() and c.strip() != '-']
+                else:
+                    corrected_text = parts.strip()
 
             return {
                 'success': True,
@@ -325,27 +369,7 @@ CONFIDENCE: [level]"""
             return {'success': False, 'error': 'Gemini不可用', 'questions': []}
 
         try:
-            prompt = f"""Analyze this text and extract exam questions (Chinese middle school English exam format).
-
-Text:
----
-{text}
----
-
-Identify these question types:
-1. Multiple Choice (单选题)
-2. Cloze Test (完形填空)
-3. Reading Comprehension (阅读理解)
-4. Task-based Reading (任务型阅读)
-5. Word Selection (选词填空)
-6. Grammar Filling (语法填空)
-7. Spelling (单词拼写)
-8. Sentence Transformation (句型转换)
-9. Translation (翻译)
-10. Writing (书面表达)
-
-Return JSON array with: question_number, content, question_type, sub_type, difficulty, choices, passage, tags, notes.
-Return [] if no questions found."""
+            prompt = QUESTION_PARSE_PROMPT.format(text=text)
 
             response = self.client.generate_content(prompt)
             response_text = response.text
@@ -353,12 +377,10 @@ Return [] if no questions found."""
             import json
             import re
 
-            # 尝试提取JSON
             json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
             if json_match:
                 questions = json.loads(json_match.group(1))
             else:
-                # 尝试找到数组
                 array_match = re.search(r'\[[\s\S]*\]', response_text)
                 if array_match:
                     questions = json.loads(array_match.group(0))
@@ -380,11 +402,7 @@ Return [] if no questions found."""
             return {'success': False, 'error': 'Gemini不可用'}
 
         try:
-            prompt = f"""Analyze this question in JSON format:
-
-Question: {question_text}
-
-Provide: question_type, difficulty, difficulty_reasoning, tags, subject, choices, suggested_answer, notes."""
+            prompt = QUESTION_ANALYZE_PROMPT.format(question=question_text)
 
             response = self.client.generate_content(prompt)
             response_text = response.text
@@ -432,7 +450,9 @@ class OllamaProvider(AIProvider):
                     available_list = ', '.join(models[:5]) if models else '(无模型)'
                     print(f"⚠️ Ollama 模型 {self.model} 未找到。可用模型: {available_list}")
                     if models:
-                        self.model = models[0]
+                        # 优先选择更大的中文模型
+                        preferred_order = [m for m in models if any(k in m for k in ['qwen', 'chatglm', 'chinese', 'yi'])]
+                        self.model = preferred_order[0] if preferred_order else models[0]
                         self._available = True
                         print(f"   → 自动切换到: {self.model}")
         except urllib.error.URLError:
@@ -461,7 +481,7 @@ class OllamaProvider(AIProvider):
                 headers={'Content-Type': 'application/json'},
                 method='POST'
             )
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=180) as resp:
                 result = _json.loads(resp.read().decode('utf-8'))
                 return result.get('response', '')
         except Exception as e:
@@ -472,31 +492,10 @@ class OllamaProvider(AIProvider):
         if not self.is_available():
             return {'success': False, 'error': 'Ollama不可用', 'corrected_text': ocr_text}
 
-        prompt = f"""Please correct the following OCR text. The text is primarily English with some Chinese descriptions. OCR confidence: {confidence:.2%}.
-
-Common OCR errors to watch for:
-- Similar characters (0/O, 1/l/I, 5/S)
-- Missing/extra spaces
-- Mathematical symbols
-
-Original text:
----
-{ocr_text}
----
-
-Provide:
-1. Corrected text
-2. List of corrections made
-3. Confidence level (high/medium/low)
-
-Format:
-CORRECTED TEXT:
-[corrected text here]
-
-CORRECTIONS MADE:
-- [list of corrections]
-
-CONFIDENCE: [high/medium/low]"""
+        prompt = OCR_CORRECT_PROMPT.format(
+            confidence=f"{confidence:.2%}",
+            ocr_text=ocr_text
+        )
 
         response_text = self._generate(prompt, max_tokens=4000)
         if response_text is None:
@@ -506,15 +505,21 @@ CONFIDENCE: [high/medium/low]"""
         corrections = []
         ai_confidence = 'medium'
 
-        if 'CORRECTED TEXT:' in response_text:
-            parts = response_text.split('CORRECTED TEXT:')[1]
-            if 'CORRECTIONS MADE:' in parts:
-                corrected_text = parts.split('CORRECTIONS MADE:')[0].strip()
-                corrections_part = parts.split('CORRECTIONS MADE:')[1]
-                if 'CONFIDENCE:' in corrections_part:
-                    corrections_text = corrections_part.split('CONFIDENCE:')[0].strip()
-                    ai_confidence = corrections_part.split('CONFIDENCE:')[1].strip().lower()
-                    corrections = [c.strip('- ').strip() for c in corrections_text.split('\n') if c.strip()]
+        if '【纠正文本】' in response_text:
+            parts = response_text.split('【纠正文本】')[1]
+            if '【修正列表】' in parts:
+                corrected_text = parts.split('【修正列表】')[0].strip()
+                corrections_part = parts.split('【修正列表】')[1]
+                if '【置信度】' in corrections_part:
+                    corrections_text = corrections_part.split('【置信度】')[0].strip()
+                    conf_text = corrections_part.split('【置信度】')[1].strip()
+                    if '高' in conf_text:
+                        ai_confidence = 'high'
+                    elif '低' in conf_text:
+                        ai_confidence = 'low'
+                    else:
+                        ai_confidence = 'medium'
+                    corrections = [c.strip('- ').strip() for c in corrections_text.split('\n') if c.strip() and c.strip() != '-']
             else:
                 corrected_text = parts.strip()
 
@@ -532,25 +537,7 @@ CONFIDENCE: [high/medium/low]"""
         if not self.is_available():
             return {'success': False, 'error': 'Ollama不可用', 'questions': []}
 
-        prompt = f"""Analyze this text and extract exam questions (Chinese middle school English exam format).
-
-Text:
----
-{text}
----
-
-Identify these question types:
-1. Multiple Choice (单选题)
-2. Cloze Test (完形填空)
-3. Reading Comprehension (阅读理解)
-4. Task-based Reading (任务型阅读)
-5. Word Selection (选词填空)
-6. Grammar Filling (语法填空)
-7. Translation (翻译)
-8. Writing (书面表达)
-
-Return ONLY a JSON array with: question_number, content, question_type, difficulty, choices, tags.
-If no questions found, return []"""
+        prompt = QUESTION_PARSE_PROMPT.format(text=text)
 
         response_text = self._generate(prompt, max_tokens=8000)
         if response_text is None:
@@ -579,12 +566,7 @@ If no questions found, return []"""
         if not self.is_available():
             return {'success': False, 'error': 'Ollama不可用'}
 
-        prompt = f"""Analyze this question in JSON format:
-
-Question: {question_text}
-
-Provide: question_type, difficulty, tags, subject, choices, suggested_answer, notes.
-Return ONLY valid JSON."""
+        prompt = QUESTION_ANALYZE_PROMPT.format(question=question_text)
 
         response_text = self._generate(prompt, max_tokens=2000)
         if response_text is None:

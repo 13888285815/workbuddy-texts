@@ -1,8 +1,10 @@
 """
 OCR文本识别处理模块
 支持图片和PDF文件的文本提取
+中文优先识别，兼容中英文混合试卷
 """
 import os
+import re
 from typing import List, Dict, Any
 from paddleocr import PaddleOCR
 from PIL import Image
@@ -12,95 +14,127 @@ import cv2
 import numpy as np
 
 
-class OCRProcessor:
-    """OCR处理器"""
+def _detect_chinese_ratio(text: str) -> float:
+    """检测文本中中文字符的比例"""
+    if not text.strip():
+        return 0.0
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    total_chars = len(re.sub(r'\s', '', text))
+    return chinese_chars / total_chars if total_chars > 0 else 0.0
 
-    def __init__(self, use_gpu=False, lang='en'):
+
+class OCRProcessor:
+    """OCR处理器 — 中文优先"""
+
+    def __init__(self, use_gpu=False, lang='ch'):
         """
         初始化OCR处理器
         :param use_gpu: 是否使用GPU加速
-        :param lang: 语言模式 'en'=英文, 'ch'=中文, 'en+ch'=中英文混合
+        :param lang: 语言模式 'ch'=中文(默认，也支持英文), 'en'=纯英文
         """
-        # 英文优先配置
-        self.ocr_en = PaddleOCR(
+        # 中文模型 — PaddleOCR中文模型本身支持中英文混合
+        self.ocr_ch = PaddleOCR(
             use_angle_cls=True,
-            lang='en',  # 英文
+            lang='ch',
             use_gpu=use_gpu,
             show_log=False
         )
 
-        # 中英文混合配置
-        self.ocr_mix = PaddleOCR(
-            use_angle_cls=True,
-            lang='ch',  # 中文模式也能识别英文
-            use_gpu=use_gpu,
-            show_log=False
-        )
+        # 英文模型 — 仅在纯英文场景使用
+        self.ocr_en = None  # 延迟加载，避免不必要的内存占用
+        self._en_initialized = False
 
         self.lang = lang
-        self.ocr = self.ocr_en if lang == 'en' else self.ocr_mix
+        # 默认使用中文模型
+        self.ocr = self.ocr_ch
 
-    def process_image(self, image_path: str, use_both=True) -> Dict[str, Any]:
+    def _ensure_en_ocr(self):
+        """延迟加载英文OCR模型"""
+        if not self._en_initialized:
+            self.ocr_en = PaddleOCR(
+                use_angle_cls=True,
+                lang='en',
+                use_gpu=False,
+                show_log=False
+            )
+            self._en_initialized = True
+
+    def process_image(self, image_path: str, lang: str = None) -> Dict[str, Any]:
         """
         处理图片文件，提取文本
         :param image_path: 图片路径
-        :param use_both: 是否同时使用英文和中英文OCR进行识别
+        :param lang: 强制指定语言 'ch'/'en'，None则自动检测
         :return: 识别结果字典
         """
         try:
-            # 先用英文OCR识别
-            result_en = self.ocr_en.ocr(image_path, cls=True)
+            # 第一步：用中文模型识别（支持中英文混合）
+            result_ch = self.ocr_ch.ocr(image_path, cls=True)
 
-            text_lines = []
-            boxes = []
-            confidences = []
+            text_lines_ch = []
+            boxes_ch = []
+            confidences_ch = []
 
-            if result_en and result_en[0]:
-                for line in result_en[0]:
-                    box = line[0]  # 文本框坐标
-                    text = line[1][0]  # 识别的文本
-                    confidence = line[1][1]  # 置信度
+            if result_ch and result_ch[0]:
+                for line in result_ch[0]:
+                    box = line[0]
+                    text = line[1][0]
+                    confidence = line[1][1]
+                    text_lines_ch.append(text)
+                    boxes_ch.append(box)
+                    confidences_ch.append(confidence)
 
-                    text_lines.append(text)
-                    boxes.append(box)
-                    confidences.append(confidence)
+            full_text_ch = '\n'.join(text_lines_ch)
+            avg_conf_ch = sum(confidences_ch) / len(confidences_ch) if confidences_ch else 0
 
-            # 合并文本
-            full_text = '\n'.join(text_lines)
-            avg_conf = sum(confidences) / len(confidences) if confidences else 0
+            # 如果强制指定英文，或自动检测发现几乎没有中文
+            use_en = False
+            if lang == 'en':
+                use_en = True
+            elif lang is None:
+                chinese_ratio = _detect_chinese_ratio(full_text_ch)
+                # 中文比例极低且置信度不高时，尝试英文模型
+                if chinese_ratio < 0.05 and avg_conf_ch < 0.80:
+                    use_en = True
 
-            # 如果启用双模式且置信度较低，再用中英文混合OCR识别
-            mixed_text = None
-            if use_both and avg_conf < 0.85:
-                result_mix = self.ocr_mix.ocr(image_path, cls=True)
+            if use_en:
+                self._ensure_en_ocr()
+                result_en = self.ocr_en.ocr(image_path, cls=True)
 
-                text_lines_mix = []
-                confidences_mix = []
+                text_lines_en = []
+                boxes_en = []
+                confidences_en = []
 
-                if result_mix and result_mix[0]:
-                    for line in result_mix[0]:
-                        text_lines_mix.append(line[1][0])
-                        confidences_mix.append(line[1][1])
+                if result_en and result_en[0]:
+                    for line in result_en[0]:
+                        text_lines_en.append(line[1][0])
+                        boxes_en.append(line[0])
+                        confidences_en.append(line[1][1])
 
-                mixed_text = '\n'.join(text_lines_mix)
-                avg_conf_mix = sum(confidences_mix) / len(confidences_mix) if confidences_mix else 0
+                full_text_en = '\n'.join(text_lines_en)
+                avg_conf_en = sum(confidences_en) / len(confidences_en) if confidences_en else 0
 
-                # 如果混合模式置信度更高，使用混合模式结果
-                if avg_conf_mix > avg_conf:
-                    full_text = mixed_text
-                    text_lines = text_lines_mix
-                    confidences = confidences_mix
-                    avg_conf = avg_conf_mix
+                # 选择置信度更高的结果
+                if avg_conf_en > avg_conf_ch:
+                    return {
+                        'success': True,
+                        'text': full_text_en,
+                        'text_lines': text_lines_en,
+                        'boxes': boxes_en,
+                        'confidences': confidences_en,
+                        'total_lines': len(text_lines_en),
+                        'avg_confidence': avg_conf_en,
+                        'detected_lang': 'en'
+                    }
 
             return {
                 'success': True,
-                'text': full_text,
-                'text_lines': text_lines,
-                'boxes': boxes,
-                'confidences': confidences,
-                'total_lines': len(text_lines),
-                'avg_confidence': avg_conf,
-                'mixed_text': mixed_text  # 保存混合模式的结果供参考
+                'text': full_text_ch,
+                'text_lines': text_lines_ch,
+                'boxes': boxes_ch,
+                'confidences': confidences_ch,
+                'total_lines': len(text_lines_ch),
+                'avg_confidence': avg_conf_ch,
+                'detected_lang': 'ch'
             }
 
         except Exception as e:
@@ -110,11 +144,12 @@ class OCRProcessor:
                 'text': ''
             }
 
-    def process_pdf(self, pdf_path: str, dpi=300) -> Dict[str, Any]:
+    def process_pdf(self, pdf_path: str, dpi=300, lang: str = None) -> Dict[str, Any]:
         """
         处理PDF文件，提取文本
         :param pdf_path: PDF文件路径
-        :param dpi: 转换图片的DPI，越高越清晰但处理越慢
+        :param dpi: 转换图片的DPI
+        :param lang: 强制指定语言
         :return: 识别结果字典
         """
         try:
@@ -126,7 +161,6 @@ class OCRProcessor:
                 for page_num, page in enumerate(pdf.pages, 1):
                     text = page.extract_text()
                     if text and text.strip():
-                        # 如果能直接提取到文本，使用这个方法
                         all_text.append(text)
                         all_pages_data.append({
                             'page': page_num,
@@ -139,15 +173,13 @@ class OCRProcessor:
                 all_text = []
                 all_pages_data = []
 
-                # 将PDF转换为图片
                 images = convert_from_path(pdf_path, dpi=dpi)
 
                 for page_num, image in enumerate(images, 1):
-                    # 将PIL图片转换为numpy数组
                     img_array = np.array(image)
 
-                    # OCR识别
-                    result = self.ocr.ocr(img_array, cls=True)
+                    # 使用中文模型OCR（默认支持中英文混合）
+                    result = self.ocr_ch.ocr(img_array, cls=True)
 
                     page_text_lines = []
                     if result and result[0]:
@@ -165,7 +197,6 @@ class OCRProcessor:
                         'method': 'ocr'
                     })
 
-            # 合并所有页面的文本
             full_text = '\n\n'.join(all_text)
 
             return {
@@ -182,10 +213,11 @@ class OCRProcessor:
                 'text': ''
             }
 
-    def process_file(self, file_path: str) -> Dict[str, Any]:
+    def process_file(self, file_path: str, lang: str = None) -> Dict[str, Any]:
         """
         自动识别文件类型并处理
         :param file_path: 文件路径
+        :param lang: 强制指定语言 'ch'/'en'
         :return: 识别结果
         """
         if not os.path.exists(file_path):
@@ -197,54 +229,128 @@ class OCRProcessor:
         ext = os.path.splitext(file_path)[1].lower()
 
         if ext == '.pdf':
-            return self.process_pdf(file_path)
+            return self.process_pdf(file_path, lang=lang)
         elif ext in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp']:
-            return self.process_image(file_path)
+            return self.process_image(file_path, lang=lang)
         else:
             return {
                 'success': False,
                 'error': f'不支持的文件格式: {ext}'
             }
 
-    def extract_questions_from_text(self, text: str) -> List[str]:
+    def extract_questions_from_text(self, text: str) -> List[Dict[str, Any]]:
         """
-        从文本中提取题目（支持英文题目编号）
+        从文本中提取题目 — 支持中国各类试卷格式
         :param text: 文本内容
-        :return: 题目列表
+        :return: 题目列表，每项包含 content, question_number, section_title
         """
         questions = []
         lines = text.split('\n')
 
         current_question = []
-        # 支持英文题目编号：1., 2., Question 1, Q1, (1), etc.
-        import re
-        question_patterns = [
-            r'^\d+\.',  # 1., 2., 3.
-            r'^Question\s+\d+',  # Question 1, Question 2
-            r'^Q\d+',  # Q1, Q2
-            r'^\(\d+\)',  # (1), (2)
-            r'^[A-Z]\.',  # A., B., C. (用于选项，但也可能是题目)
-            r'^一、|^二、|^三、|^四、|^五、',  # 中文编号
-            r'^（\d+）',  # 中文括号编号
+        current_section = ''
+        question_num = 0
+
+        # ===== 大题标题模式 =====
+        section_patterns = [
+            r'^[一二三四五六七八九十]+[、．.]\s*',           # 一、选择题  二．填空题
+            r'^第[一二三四五六七八九十]+[部分大题]',          # 第一部分  第二大题
+            r'^[（(]\s*[一二三四五六七八九十]+\s*[)）]\s*',  # （一）选择题
+            r'^Part\s+[IVX]+\s*',                            # Part I / Part IV
+            r'^Section\s+[A-Z]\s*',                          # Section A
         ]
 
+        # ===== 主要题号模式（独立成题） =====
+        main_question_patterns = [
+            r'^\d+[、．.]\s*',              # 1、  1．  1.
+            r'^第\d+题\s*',                 # 第1题
+            r'^\d+\s*[．.]\s{1,}',          # 1．  1. (带空格，排除1.5这类数字)
+            r'^Question\s+\d+',             # Question 1
+            r'^Q\d+[\.\:]',                 # Q1. / Q1:
+        ]
+
+        # ===== 子题号模式（解答题的小问，合并到主题目） =====
+        sub_question_patterns = [
+            r'^（\d+）\s*',                 # （1）（2）
+            r'^\(\d+\)\s*',                 # (1)(2)
+        ]
+
+        # ===== 选项模式 =====
+        option_patterns = [
+            r'^[A-D][、．.\s]',             # A. B. C. D. / A、B、
+            r'^[①②③④⑤⑥]',                 # ①②③④
+            r'^\([A-D]\)\s*',               # (A) (B) (C) (D)
+        ]
+
+        # ===== 试卷标题/元信息模式（跳过不作为题目） =====
+        skip_patterns = [
+            r'.*模拟考试$',                  # xx模拟考试
+            r'.*期末考试$',                  # xx期末考试
+            r'^时间[：:]',                   # 时间：120分钟
+            r'^满分[：:]',                   # 满分：150分
+            r'^注意事项',                    # 注意事项
+            r'^第\s*\d+\s*页',              # 第1页
+            r'^姓名',                       # 姓名
+            r'^班级',                       # 班级
+            r'^考号',                       # 考号
+            r'^学校',                       # 学校
+        ]
+
+        section_re = re.compile('|'.join(section_patterns))
+        main_question_re = re.compile('|'.join(main_question_patterns))
+        sub_question_re = re.compile('|'.join(sub_question_patterns))
+        option_re = re.compile('|'.join(option_patterns))
+        skip_re = re.compile('|'.join(skip_patterns))
+
         for line in lines:
-            line = line.strip()
-            if not line:
+            stripped = line.strip()
+            if not stripped:
                 continue
 
-            # 检查是否是新题目的开始
-            is_new_question = any(re.match(pattern, line) for pattern in question_patterns)
+            # 跳过试卷标题和元信息
+            if skip_re.match(stripped):
+                continue
 
-            if is_new_question and current_question:
-                # 保存上一道题目
-                questions.append('\n'.join(current_question))
-                current_question = [line]
+            # 检查是否是大题标题
+            if section_re.match(stripped):
+                # 保存当前小题
+                if current_question:
+                    question_num += 1
+                    questions.append({
+                        'content': '\n'.join(current_question),
+                        'question_number': question_num,
+                        'section_title': current_section
+                    })
+                    current_question = []
+                current_section = stripped
+                continue
+
+            # 检查是否是子题号（解答题的小问，合并到当前题）
+            is_sub_question = bool(sub_question_re.match(stripped))
+
+            # 检查是否是主要题目编号（但不是选项行）
+            is_main_question = bool(main_question_re.match(stripped)) and not option_re.match(stripped)
+
+            if is_main_question and current_question:
+                # 保存上一题
+                question_num += 1
+                questions.append({
+                    'content': '\n'.join(current_question),
+                    'question_number': question_num,
+                    'section_title': current_section
+                })
+                current_question = [stripped]
             else:
-                current_question.append(line)
+                # 子题号和选项都追加到当前题目
+                current_question.append(stripped)
 
-        # 保存最后一道题目
+        # 保存最后一题
         if current_question:
-            questions.append('\n'.join(current_question))
+            question_num += 1
+            questions.append({
+                'content': '\n'.join(current_question),
+                'question_number': question_num,
+                'section_title': current_section
+            })
 
         return questions

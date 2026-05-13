@@ -4,7 +4,7 @@
 
 {% block content %}
 <h2>导入题目</h2>
-<p class="subtitle">上传图片或PDF文件，系统将自动识别并提取题目内容（支持英文题目优先识别）</p>
+<p class="subtitle">上传图片或PDF文件，系统将自动识别并提取题目内容</p>
 
 <div class="ai-status-bar" id="aiStatusBar">
     <span id="aiStatusText">正在检查AI助手状态...</span>
@@ -12,6 +12,32 @@
         <input type="checkbox" id="useAiToggle" checked>
         <span>使用AI智能纠正</span>
     </label>
+</div>
+
+<!-- 语言和学科选择 -->
+<div class="upload-options" style="display: flex; gap: 1rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap;">
+    <div class="form-group" style="margin:0; min-width:140px;">
+        <label style="font-weight:600; margin-bottom:0.3rem; display:block;">试卷语言：</label>
+        <select id="ocrLang" class="form-control" style="width:auto;">
+            <option value="ch" selected>中文（默认）</option>
+            <option value="en">英文</option>
+        </select>
+    </div>
+    <div class="form-group" style="margin:0; min-width:140px;">
+        <label style="font-weight:600; margin-bottom:0.3rem; display:block;">学科：</label>
+        <select id="subjectType" class="form-control" style="width:auto;">
+            <option value="auto" selected>自动识别</option>
+            <option value="数学">数学</option>
+            <option value="语文">语文</option>
+            <option value="英语">英语</option>
+            <option value="物理">物理</option>
+            <option value="化学">化学</option>
+            <option value="生物">生物</option>
+            <option value="政治">政治</option>
+            <option value="历史">历史</option>
+            <option value="地理">地理</option>
+        </select>
+    </div>
 </div>
 
 <div class="upload-section">
