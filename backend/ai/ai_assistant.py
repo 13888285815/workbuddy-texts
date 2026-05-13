@@ -1,10 +1,10 @@
 """
 AI辅助识别和纠正模块
-支持Claude和Gemini API
+支持Claude、Gemini API 和 Ollama 本地推理
 """
 import os
 from typing import Dict, Any, List, Optional
-from backend.ai.ai_providers import AIProvider, ClaudeProvider, GeminiProvider
+from backend.ai.ai_providers import AIProvider, ClaudeProvider, GeminiProvider, OllamaProvider
 
 
 class AIAssistant:
@@ -22,7 +22,7 @@ class AIAssistant:
     def _init_provider(self):
         """初始化AI提供商"""
         if self.provider_name == 'auto':
-            # 自动选择：优先Claude，然后Gemini
+            # 自动选择：优先Claude → Gemini → Ollama本地
             claude = ClaudeProvider()
             if claude.is_available():
                 self.provider = claude
@@ -37,7 +37,14 @@ class AIAssistant:
                 print("✅ AI助手: 使用Gemini")
                 return
 
-            print("⚠️ AI助手: 无可用的AI提供商")
+            ollama = OllamaProvider()
+            if ollama.is_available():
+                self.provider = ollama
+                self.provider_name = 'ollama'
+                print("✅ AI助手: 使用Ollama本地推理")
+                return
+
+            print("⚠️ AI助手: 无可用的AI提供商 (可尝试: 1.设置ANTHROPIC_API_KEY 2.设置GOOGLE_API_KEY 3.启动Ollama)")
 
         elif self.provider_name.lower() == 'claude':
             claude = ClaudeProvider()
@@ -54,6 +61,14 @@ class AIAssistant:
                 print("✅ AI助手: 使用Gemini")
             else:
                 print("❌ Gemini不可用，请设置GOOGLE_API_KEY或GEMINI_API_KEY")
+
+        elif self.provider_name.lower() == 'ollama':
+            ollama = OllamaProvider()
+            if ollama.is_available():
+                self.provider = ollama
+                print("✅ AI助手: 使用Ollama本地推理")
+            else:
+                print("❌ Ollama不可用，请启动Ollama服务并拉取模型")
 
         else:
             print(f"❌ 未知的AI提供商: {self.provider_name}")

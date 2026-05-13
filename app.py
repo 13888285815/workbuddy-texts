@@ -425,7 +425,7 @@ def ai_correct_text():
     if not ai_assistant.is_available():
         return jsonify({
             'success': False,
-            'error': 'AI助手不可用，请配置ANTHROPIC_API_KEY环境变量'
+            'error': 'AI助手不可用，请配置API Key或启动Ollama本地推理'
         }), 503
 
     try:
@@ -448,7 +448,7 @@ def ai_parse_questions():
     if not ai_assistant.is_available():
         return jsonify({
             'success': False,
-            'error': 'AI助手不可用，请配置ANTHROPIC_API_KEY环境变量'
+            'error': 'AI助手不可用，请配置API Key或启动Ollama本地推理'
         }), 503
 
     try:
@@ -470,7 +470,7 @@ def ai_analyze_question():
     if not ai_assistant.is_available():
         return jsonify({
             'success': False,
-            'error': 'AI助手不可用，请配置ANTHROPIC_API_KEY环境变量'
+            'error': 'AI助手不可用，请配置API Key或启动Ollama本地推理'
         }), 503
 
     try:
@@ -489,21 +489,25 @@ def ai_analyze_question():
 @app.route('/api/ai/status', methods=['GET'])
 def ai_status():
     """获取AI助手状态"""
+    provider_info = ai_assistant.get_provider_info()
     return jsonify({
         'available': ai_assistant.is_available(),
-        'message': 'AI助手可用' if ai_assistant.is_available() else '请配置ANTHROPIC_API_KEY环境变量'
+        'message': 'AI助手可用' if ai_assistant.is_available() else '请配置ANTHROPIC_API_KEY或GOOGLE_API_KEY，或启动Ollama本地推理',
+        'provider': provider_info
     })
 
 
 @app.route('/api/system/status', methods=['GET'])
 def system_status():
     """获取系统状态"""
+    provider_info = ai_assistant.get_provider_info()
     return jsonify({
         'status': 'ok',
         'ocr_available': _ocr_available,
         'ai_available': ai_assistant.is_available(),
         'ocr_message': 'OCR功能正常' if _ocr_available else 'OCR不可用（numpy版本不兼容，请降级numpy<2）',
-        'ai_message': 'AI功能正常' if ai_assistant.is_available() else '请配置ANTHROPIC_API_KEY或GOOGLE_API_KEY'
+        'ai_message': f"AI功能正常 ({provider_info.get('provider', '未知')})" if ai_assistant.is_available() else '请配置API Key或启动Ollama本地推理',
+        'ai_provider': provider_info
     })
 
 

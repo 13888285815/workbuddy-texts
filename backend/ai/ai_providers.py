@@ -1,8 +1,12 @@
 """
 AI提供商基类和具体实现
-支持Claude和Gemini API
+支持Claude、Gemini API 和 Ollama 本地推理
 """
 import os
+import json as _json
+import re as _re
+import urllib.request
+import urllib.error
 from typing import Dict, Any, List, Optional
 from abc import ABC, abstractmethod
 
@@ -402,3 +406,200 @@ Provide: question_type, difficulty, difficulty_reasoning, tags, subject, choices
 
         except Exception as e:
             return {'success': False, 'error': str(e)}
+
+
+class OllamaProvider(AIProvider):
+    """Ollama 本地推理提供商 — 无需 API Key"""
+
+    def __init__(self, model: Optional[str] = None, base_url: Optional[str] = None):
+        self.model = model or os.getenv('OLLAMA_MODEL', 'qwen2.5:1.5b')
+        self.base_url = (base_url or os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')).rstrip('/')
+        self._available = False
+        self._check_available()
+
+    def _check_available(self):
+        """检查 Ollama 服务是否运行且模型可用"""
+        try:
+            req = urllib.request.Request(f'{self.base_url}/api/tags', method='GET')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = _json.loads(resp.read().decode('utf-8'))
+                models = [m.get('name', '') for m in data.get('models', [])]
+                matched = any(m == self.model or m.startswith(self.model.split(':')[0]) for m in models)
+                if matched:
+                    self._available = True
+                    print(f"✅ Ollama 本地模型可用: {self.model}")
+                else:
+                    available_list = ', '.join(models[:5]) if models else '(无模型)'
+                    print(f"⚠️ Ollama 模型 {self.model} 未找到。可用模型: {available_list}")
+                    if models:
+                        self.model = models[0]
+                        self._available = True
+                        print(f"   → 自动切换到: {self.model}")
+        except urllib.error.URLError:
+            print("⚠️ Ollama 服务未运行 (请执行: ollama serve)")
+        except Exception as e:
+            print(f"⚠️ Ollama 检查失败: {e}")
+
+    def is_available(self) -> bool:
+        return self._available
+
+    def get_provider_name(self) -> str:
+        return "Ollama"
+
+    def _generate(self, prompt: str, max_tokens: int = 4000) -> Optional[str]:
+        """调用 Ollama API 生成文本"""
+        try:
+            payload = _json.dumps({
+                'model': self.model,
+                'prompt': prompt,
+                'stream': False,
+                'options': {'num_predict': max_tokens}
+            }).encode('utf-8')
+            req = urllib.request.Request(
+                f'{self.base_url}/api/generate',
+                data=payload,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                result = _json.loads(resp.read().decode('utf-8'))
+                return result.get('response', '')
+        except Exception as e:
+            print(f"Ollama 生成失败: {e}")
+            return None
+
+    def correct_ocr_text(self, ocr_text: str, confidence: float = 0.0) -> Dict[str, Any]:
+        if not self.is_available():
+            return {'success': False, 'error': 'Ollama不可用', 'corrected_text': ocr_text}
+
+        prompt = f"""Please correct the following OCR text. The text is primarily English with some Chinese descriptions. OCR confidence: {confidence:.2%}.
+
+Common OCR errors to watch for:
+- Similar characters (0/O, 1/l/I, 5/S)
+- Missing/extra spaces
+- Mathematical symbols
+
+Original text:
+---
+{ocr_text}
+---
+
+Provide:
+1. Corrected text
+2. List of corrections made
+3. Confidence level (high/medium/low)
+
+Format:
+CORRECTED TEXT:
+[corrected text here]
+
+CORRECTIONS MADE:
+- [list of corrections]
+
+CONFIDENCE: [high/medium/low]"""
+
+        response_text = self._generate(prompt, max_tokens=4000)
+        if response_text is None:
+            return {'success': False, 'error': 'Ollama生成失败', 'corrected_text': ocr_text}
+
+        corrected_text = ocr_text
+        corrections = []
+        ai_confidence = 'medium'
+
+        if 'CORRECTED TEXT:' in response_text:
+            parts = response_text.split('CORRECTED TEXT:')[1]
+            if 'CORRECTIONS MADE:' in parts:
+                corrected_text = parts.split('CORRECTIONS MADE:')[0].strip()
+                corrections_part = parts.split('CORRECTIONS MADE:')[1]
+                if 'CONFIDENCE:' in corrections_part:
+                    corrections_text = corrections_part.split('CONFIDENCE:')[0].strip()
+                    ai_confidence = corrections_part.split('CONFIDENCE:')[1].strip().lower()
+                    corrections = [c.strip('- ').strip() for c in corrections_text.split('\n') if c.strip()]
+            else:
+                corrected_text = parts.strip()
+
+        return {
+            'success': True,
+            'corrected_text': corrected_text,
+            'original_text': ocr_text,
+            'corrections': corrections,
+            'ai_confidence': ai_confidence,
+            'ocr_confidence': confidence,
+            'provider': 'Ollama'
+        }
+
+    def parse_questions(self, text: str) -> Dict[str, Any]:
+        if not self.is_available():
+            return {'success': False, 'error': 'Ollama不可用', 'questions': []}
+
+        prompt = f"""Analyze this text and extract exam questions (Chinese middle school English exam format).
+
+Text:
+---
+{text}
+---
+
+Identify these question types:
+1. Multiple Choice (单选题)
+2. Cloze Test (完形填空)
+3. Reading Comprehension (阅读理解)
+4. Task-based Reading (任务型阅读)
+5. Word Selection (选词填空)
+6. Grammar Filling (语法填空)
+7. Translation (翻译)
+8. Writing (书面表达)
+
+Return ONLY a JSON array with: question_number, content, question_type, difficulty, choices, tags.
+If no questions found, return []"""
+
+        response_text = self._generate(prompt, max_tokens=8000)
+        if response_text is None:
+            return {'success': False, 'error': 'Ollama生成失败', 'questions': []}
+
+        questions = []
+        try:
+            json_match = _re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
+            if json_match:
+                questions = _json.loads(json_match.group(1))
+            else:
+                array_match = _re.search(r'\[[\s\S]*\]', response_text)
+                if array_match:
+                    questions = _json.loads(array_match.group(0))
+        except _json.JSONDecodeError:
+            pass
+
+        return {
+            'success': True,
+            'questions': questions,
+            'total_questions': len(questions),
+            'provider': 'Ollama'
+        }
+
+    def analyze_question(self, question_text: str) -> Dict[str, Any]:
+        if not self.is_available():
+            return {'success': False, 'error': 'Ollama不可用'}
+
+        prompt = f"""Analyze this question in JSON format:
+
+Question: {question_text}
+
+Provide: question_type, difficulty, tags, subject, choices, suggested_answer, notes.
+Return ONLY valid JSON."""
+
+        response_text = self._generate(prompt, max_tokens=2000)
+        if response_text is None:
+            return {'success': False, 'error': 'Ollama生成失败'}
+
+        try:
+            json_match = _re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
+            if json_match:
+                analysis = _json.loads(json_match.group(1))
+            else:
+                obj_match = _re.search(r'\{[\s\S]*\}', response_text)
+                if obj_match:
+                    analysis = _json.loads(obj_match.group(0))
+                else:
+                    analysis = {}
+            return {'success': True, 'provider': 'Ollama', **analysis}
+        except _json.JSONDecodeError:
+            return {'success': False, 'error': 'JSON解析失败', 'raw_response': response_text[:500]}
