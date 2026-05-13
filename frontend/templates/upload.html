@@ -8,13 +8,14 @@
 
 <div class="ai-status-bar" id="aiStatusBar">
     <span id="aiStatusText">正在检查AI助手状态...</span>
+    <span id="aiProviderInfo" style="margin-left:0.5rem; font-size:0.85em; color:#666;"></span>
     <label class="ai-toggle">
         <input type="checkbox" id="useAiToggle" checked>
         <span>使用AI智能纠正</span>
     </label>
 </div>
 
-<!-- 语言和学科选择 -->
+<!-- 语言、学科和AI模型选择 -->
 <div class="upload-options" style="display: flex; gap: 1rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap;">
     <div class="form-group" style="margin:0; min-width:140px;">
         <label style="font-weight:600; margin-bottom:0.3rem; display:block;">试卷语言：</label>
@@ -36,6 +37,17 @@
             <option value="政治">政治</option>
             <option value="历史">历史</option>
             <option value="地理">地理</option>
+        </select>
+    </div>
+    <div class="form-group" style="margin:0; min-width:180px;">
+        <label style="font-weight:600; margin-bottom:0.3rem; display:block;">AI模型：</label>
+        <select id="aiModel" class="form-control" style="width:auto;">
+            <option value="auto" selected>自动选择（推荐）</option>
+            <option value="deepseek">DeepSeek（免费）</option>
+            <option value="qwen">通义千问（免费）</option>
+            <option value="siliconflow">硅基流动（免费）</option>
+            <option value="gemini">Gemini Flash（免费）</option>
+            <option value="ollama">Ollama 本地模型</option>
         </select>
     </div>
 </div>

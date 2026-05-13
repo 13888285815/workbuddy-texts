@@ -14,15 +14,24 @@ async function checkAIStatus() {
 
         const statusBar = document.getElementById('aiStatusBar');
         const statusText = document.getElementById('aiStatusText');
+        const providerInfo = document.getElementById('aiProviderInfo');
         const toggle = document.getElementById('useAiToggle');
 
         if (aiAvailable) {
+            const pName = result.provider?.provider || '未知';
+            const fallbacks = result.provider?.fallback_names || [];
+            let infoText = `当前: ${pName}`;
+            if (fallbacks.length > 0) {
+                infoText += ` | 备用: ${fallbacks.join(', ')}`;
+            }
             statusText.innerHTML = '✅ AI助手已启用 - 将自动纠正OCR识别结果';
+            if (providerInfo) providerInfo.textContent = infoText;
             statusBar.style.backgroundColor = '#d4edda';
             statusBar.style.color = '#155724';
             toggle.disabled = false;
         } else {
             statusText.innerHTML = '⚠️ AI助手未配置 - 将使用基础OCR识别';
+            if (providerInfo) providerInfo.textContent = '请设置免费API Key（DeepSeek/通义千问/硅基流动）或启动Ollama';
             statusBar.style.backgroundColor = '#fff3cd';
             statusBar.style.color = '#856404';
             toggle.checked = false;
@@ -83,6 +92,10 @@ async function handleFileUpload(file) {
     // 添加语言和学科参数
     const ocrLang = document.getElementById('ocrLang').value;
     formData.append('lang', ocrLang);
+
+    // 添加AI模型选择
+    const aiModel = document.getElementById('aiModel').value;
+    formData.append('ai_model', aiModel);
 
     const processingStatus = document.getElementById('processingStatus');
     processingStatus.style.display = 'block';

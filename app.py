@@ -51,7 +51,7 @@ word_exporter = WordExporter()
 
 # AI助手 - 用于OCR纠正和题目解析
 ai_assistant = AIAssistant()
-print(f"AI助手状态: {'可用' if ai_assistant.is_available() else '不可用 (请设置ANTHROPIC_API_KEY环境变量)'}")
+print(f"AI助手状态: {'可用' if ai_assistant.is_available() else '不可用 (请设置DEEPSEEK_API_KEY/DASHSCOPE_API_KEY/SILICONFLOW_API_KEY或启动Ollama)'}")
 
 # 初始化预设模板
 template_manager.init_preset_templates()
@@ -117,6 +117,8 @@ def upload_file():
     use_ai = request.form.get('use_ai', 'true').lower() == 'true'
     # 获取语言参数：ch=中文(默认), en=英文
     lang = request.form.get('lang', 'ch')
+    # 获取AI模型选择参数
+    ai_model = request.form.get('ai_model', 'auto')
 
     try:
         # 保存文件
@@ -492,10 +494,12 @@ def ai_analyze_question():
 def ai_status():
     """获取AI助手状态"""
     provider_info = ai_assistant.get_provider_info()
+    available_providers = ai_assistant.get_available_providers()
     return jsonify({
         'available': ai_assistant.is_available(),
-        'message': 'AI助手可用' if ai_assistant.is_available() else '请配置ANTHROPIC_API_KEY或GOOGLE_API_KEY，或启动Ollama本地推理',
-        'provider': provider_info
+        'message': 'AI助手可用' if ai_assistant.is_available() else '请配置免费API Key（DeepSeek/通义千问/硅基流动/Gemini）或启动Ollama本地推理',
+        'provider': provider_info,
+        'available_providers': available_providers
     })
 
 
@@ -508,7 +512,7 @@ def system_status():
         'ocr_available': _ocr_available,
         'ai_available': ai_assistant.is_available(),
         'ocr_message': 'OCR功能正常' if _ocr_available else 'OCR不可用（numpy版本不兼容，请降级numpy<2）',
-        'ai_message': f"AI功能正常 ({provider_info.get('provider', '未知')})" if ai_assistant.is_available() else '请配置API Key或启动Ollama本地推理',
+        'ai_message': f"AI功能正常 ({provider_info.get('provider', '未知')})" if ai_assistant.is_available() else '请配置免费API Key（DeepSeek/通义千问/硅基流动/Gemini）或启动Ollama',
         'ai_provider': provider_info
     })
 
