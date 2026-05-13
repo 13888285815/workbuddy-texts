@@ -120,13 +120,15 @@ class QuestionManager:
     def search_questions(self, tag_names: Optional[List[str]] = None,
                         question_type: Optional[str] = None,
                         difficulty: Optional[str] = None,
-                        keyword: Optional[str] = None) -> List[Dict[str, Any]]:
+                        keyword: Optional[str] = None,
+                        limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         搜索题目
         :param tag_names: 标签名称列表
         :param question_type: 题型
         :param difficulty: 难度
         :param keyword: 关键词
+        :param limit: 限制返回数量
         :return: 题目列表
         """
         session = self.db.get_session()
@@ -149,6 +151,10 @@ class QuestionManager:
             # 按关键词筛选
             if keyword:
                 query = query.filter(Question.content.like(f'%{keyword}%'))
+
+            # 限制数量
+            if limit:
+                query = query.limit(limit)
 
             questions = query.all()
 

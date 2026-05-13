@@ -12,7 +12,7 @@ import json
 load_dotenv()
 
 from backend.database import DatabaseManager
-from backend.ocr import OCRProcessor
+from backend.ocr import OCRProcessor, _ocr_available
 from backend.api import QuestionManager, TagManager, ExamGenerator
 from backend.api.template_manager import TemplateManager
 from backend.export import WordExporter
@@ -38,6 +38,11 @@ db_manager.init_db()
 
 # OCR处理器 - 配置为英文优先
 ocr_processor = OCRProcessor(use_gpu=False, lang='en')
+if _ocr_available:
+    print("✅ OCR引擎已加载（PaddleOCR）")
+else:
+    print("⚠️  OCR引擎不可用（numpy版本不兼容），上传识别功能将受限")
+
 question_manager = QuestionManager(db_manager)
 tag_manager = TagManager(db_manager)
 exam_generator = ExamGenerator(db_manager)
@@ -490,6 +495,18 @@ def ai_status():
     })
 
 
+@app.route('/api/system/status', methods=['GET'])
+def system_status():
+    """获取系统状态"""
+    return jsonify({
+        'status': 'ok',
+        'ocr_available': _ocr_available,
+        'ai_available': ai_assistant.is_available(),
+        'ocr_message': 'OCR功能正常' if _ocr_available else 'OCR不可用（numpy版本不兼容，请降级numpy<2）',
+        'ai_message': 'AI功能正常' if ai_assistant.is_available() else '请配置ANTHROPIC_API_KEY或GOOGLE_API_KEY'
+    })
+
+
 # ========== 试卷模板API ==========
 
 @app.route('/api/templates', methods=['GET'])
@@ -584,4 +601,5 @@ def get_template_stats(template_id):
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    port = int(os.environ.get('PORT', 5001))
+    app.run(debug=True, host='0.0.0.0', port=port)
